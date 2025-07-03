@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TRON USDT Payment Monitor - Test Interface</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        .section {
+            margin-bottom: 40px;
+        }
+        .example {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            margin-top: 5px;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 TRON USDT Payment Monitor</h1>
+        
+        <div class="section">
+            <h2>📊 Service Status</h2>
+            <button onclick="checkHealth()">Check Health</button>
+            <button onclick="getStats()">Get Statistics</button>
+        </div>
+
+        <div class="section">
+            <h2>💰 Create Payment Watch</h2>
+            <div class="form-group">
+                <label for="walletAddress">TRON Wallet Address:</label>
+                <input type="text" id="walletAddress" placeholder="Txxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+                <div class="example">Example: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t</div>
+            </div>
+            
+            <div class="form-group">
+                <label for="expectedAmount">Expected Amount (USDT):</label>
+                <input type="number" id="expectedAmount" step="0.000001" placeholder="12.34">
+            </div>
+            
+            <div class="form-group">
+                <label for="callbackUrl">Callback URL:</label>
+                <input type="url" id="callbackUrl" placeholder="https://your-site.com/webhook">
+                <div class="example">Example: https://webhook.site/unique-url</div>
+            </div>
+            
+            <div class="form-group">
+                <label for="orderId">Order ID:</label>
+                <input type="text" id="orderId" placeholder="ORDER_123456">
+            </div>
+            
+            <button onclick="createPayment()">Create Payment Watch</button>
+        </div>
+
+        <div class="section">
+            <h2>🔍 Check Payment Status</h2>
+            <div class="form-group">
+                <label for="paymentId">Payment ID:</label>
+                <input type="text" id="paymentId" placeholder="Payment ID from create response">
+            </div>
+            <button onclick="checkPaymentStatus()">Check Status</button>
+        </div>
+
+        <div id="result"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000';
+
+        function showResult(data, type = 'info') {
+            const resultDiv = document.getElementById('result');
+            resultDiv.className = `result ${type}`;
+            resultDiv.textContent = JSON.stringify(data, null, 2);
+        }
+
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                showResult(data, response.ok ? 'success' : 'error');
+            } catch (error) {
+                showResult({error: error.message}, 'error');
+            }
+        }
+
+        async function getStats() {
+            try {
+                const response = await fetch(`${API_BASE}/stats`);
+                const data = await response.json();
+                showResult(data, response.ok ? 'success' : 'error');
+            } catch (error) {
+                showResult({error: error.message}, 'error');
+            }
+        }
+
+        async function createPayment() {
+            const walletAddress = document.getElementById('walletAddress').value;
+            const expectedAmount = parseFloat(document.getElementById('expectedAmount').value);
+            const callbackUrl = document.getElementById('callbackUrl').value;
+            const orderId = document.getElementById('orderId').value;
+
+            if (!walletAddress || !expectedAmount || !callbackUrl || !orderId) {
+                showResult({error: 'Please fill all fields'}, 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/create_payment`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        wallet_address: walletAddress,
+                        expected_amount_usdt: expectedAmount,
+                        callback_url: callbackUrl,
+                        order_id: orderId
+                    })
+                });
+                
+                const data = await response.json();
+                showResult(data, response.ok ? 'success' : 'error');
+                
+                if (response.ok && data.payment_id) {
+                    document.getElementById('paymentId').value = data.payment_id;
+                }
+            } catch (error) {
+                showResult({error: error.message}, 'error');
+            }
+        }
+
+        async function checkPaymentStatus() {
+            const paymentId = document.getElementById('paymentId').value;
+            
+            if (!paymentId) {
+                showResult({error: 'Please enter a payment ID'}, 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}/payment_status/${paymentId}`);
+                const data = await response.json();
+                showResult(data, response.ok ? 'success' : 'error');
+            } catch (error) {
+                showResult({error: error.message}, 'error');
+            }
+        }
+
+        // Auto-fill example data
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('walletAddress').value = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t';
+            document.getElementById('expectedAmount').value = '10.50';
+            document.getElementById('callbackUrl').value = 'https://webhook.site/unique-url-here';
+            document.getElementById('orderId').value = 'ORDER_' + Date.now();
+        });
+    </script>
+</body>
+</html>
