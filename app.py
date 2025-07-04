@@ -20,6 +20,12 @@ logging.basicConfig(
 )
 app.logger.setLevel(logging.INFO)
 
+# Initialize database
+from database import init_database
+from models import db, Payment, PaymentStatus, PaymentLog
+
+db_instance, migrate = init_database(app)
+
 # --- Конфигурация ---
 # Адрес контракта USDT (TRC20) на TRON Mainnet
 USDT_TRC20_CONTRACT_ADDRESS = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
@@ -33,21 +39,6 @@ POLLING_INTERVAL_SECONDS = int(os.getenv("POLLING_INTERVAL_SECONDS", "10"))
 
 # Максимальное время жизни платежного запроса (в секундах) - 24 часа
 MAX_PAYMENT_LIFETIME_SECONDS = 24 * 60 * 60
-
-# --- Хранение данных (в памяти для MVP, заменить на БД в продакшене) ---
-# Словарь для хранения запросов на отслеживание платежей
-# payment_id: {
-#   'wallet_address': '...',
-#   'expected_amount_usdt': float,
-#   'callback_url': '...',
-#   'order_id': '...',
-#   'status': 'pending' | 'completed' | 'failed',
-#   'transaction_hash': '...',
-#   'received_amount_usdt': float,
-#   'created_at': timestamp,
-#   'last_checked_block': int # Для оптимизации, чтобы не проверять старые транзакции
-# }
-payments_to_watch = {}
 
 # --- Вспомогательные функции ---
 
@@ -85,18 +76,23 @@ def is_valid_url(url):
 
 def cleanup_expired_payments():
     """
-    Удаляет истекшие платежные запросы из памяти.
+    Удаляет истекшие платежные запросы из базы данных.
     """
-    current_time = time.time()
-    expired_payments = []
-    
-    for payment_id, payment_info in payments_to_watch.items():
-        if current_time - payment_info['created_at'] > MAX_PAYMENT_LIFETIME_SECONDS:
-            expired_payments.append(payment_id)
-    
-    for payment_id in expired_payments:
-        app.logger.info("Removing expired payment: %s", payment_id)
-        del payments_to_watch[payment_id]
+    try:
+        expired_payments = Payment.get_expired_payments(MAX_PAYMENT_LIFETIME_SECONDS)
+        
+        for payment in expired_payments:
+            app.logger.info("Marking expired payment: %s", payment.id)
+            payment.mark_expired()
+            PaymentLog.log_event(payment.id, 'expired', 'Payment expired due to timeout')
+        
+        if expired_payments:
+            db.session.commit()
+            app.logger.info("Marked %d payments as expired", len(expired_payments))
+            
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error("Error cleaning up expired payments: %s", e)
 
 def get_trc20_transactions(address, min_timestamp=0):
     """
@@ -146,50 +142,55 @@ def monitor_tron_addresses():
     Периодически опрашивает TronGrid на наличие новых транзакций.
     """
     app.logger.info("Starting TRON address monitor...")
-    while True:
-        try:
-            # Очистка истекших платежей
-            cleanup_expired_payments()
-            
-            # Копируем словарь, чтобы избежать ошибок изменения во время итерации
-            current_payments = list(payments_to_watch.items())
-            
-            if not current_payments:
-                app.logger.debug("No payments to monitor, sleeping...")
-                time.sleep(POLLING_INTERVAL_SECONDS)
-                continue
-            
-            for payment_id, payment_info in current_payments:
-                if payment_info['status'] == 'pending':
+    with app.app_context():
+        while True:
+            try:
+                # Очистка истекших платежей
+                cleanup_expired_payments()
+                
+                # Получаем все ожидающие платежи из базы данных
+                current_payments = Payment.get_pending_payments()
+                
+                if not current_payments:
+                    app.logger.debug("No payments to monitor, sleeping...")
+                    time.sleep(POLLING_INTERVAL_SECONDS)
+                    continue
+                
+                for payment in current_payments:
                     try:
-                        process_pending_payment(payment_id, payment_info)
+                        process_pending_payment(payment)
                     except (requests.exceptions.RequestException, ValueError) as e:
-                        app.logger.error("Error processing payment %s: %s", payment_id, e)
+                        app.logger.error("Error processing payment %s: %s", payment.id, e)
+                        PaymentLog.log_event(payment.id, 'error', f'Processing error: {str(e)}')
                         
-        except Exception as e:
-            app.logger.error("Error in monitor thread: %s", e)
-            
-        time.sleep(POLLING_INTERVAL_SECONDS) # Ждем перед следующим циклом опроса
+            except Exception as e:
+                app.logger.error("Error in monitor thread: %s", e)
+                
+            time.sleep(POLLING_INTERVAL_SECONDS) # Ждем перед следующим циклом опроса
 
-def process_pending_payment(payment_id, payment_info):
+def process_pending_payment(payment):
     """
     Обрабатывает один ожидающий платеж.
+    :param payment: Payment model instance
     """
-    wallet_address = payment_info['wallet_address']
-    expected_amount_usdt = payment_info['expected_amount_usdt']
-    callback_url = payment_info['callback_url']
-    order_id = payment_info['order_id']
+    wallet_address = payment.wallet_address
+    expected_amount_usdt = float(payment.expected_amount_usdt)
+    callback_url = payment.callback_url
+    order_id = payment.order_id
     
-    # Используем timestamp создания запроса как min_timestamp для получения только новых транзакций
-    min_timestamp_for_check = payment_info.get('last_checked_timestamp', 0)
+    # Используем timestamp последней проверки для получения только новых транзакций
+    min_timestamp_for_check = payment.last_checked_timestamp
     
     app.logger.debug("Checking transactions for %s (order_id: %s) since %s", 
                     wallet_address, order_id, min_timestamp_for_check)
+    
+    PaymentLog.log_event(payment.id, 'checking', f'Checking transactions since {min_timestamp_for_check}')
     
     transactions = get_trc20_transactions(wallet_address, min_timestamp=min_timestamp_for_check)
     
     if transactions is None:
         app.logger.warning("Could not retrieve transactions for %s. Retrying later.", wallet_address)
+        PaymentLog.log_event(payment.id, 'api_error', 'Failed to retrieve transactions from TronGrid')
         return
 
     for tx in transactions:
@@ -206,17 +207,23 @@ def process_pending_payment(payment_id, payment_info):
             if abs(received_amount_usdt - expected_amount_usdt) < 0.000001: # 0.000001 USDT
                 app.logger.info("Matching payment found for order_id: %s", order_id)
                 
-                # Обновляем статус платежа
-                payments_to_watch[payment_id].update({
-                    'status': 'completed',
-                    'transaction_hash': tx.get('transaction_id'),
-                    'received_amount_usdt': received_amount_usdt,
-                    'completed_at': time.time()
-                })
+                # Обновляем статус платежа в базе данных
+                payment.mark_completed(tx.get('transaction_id'), received_amount_usdt)
+                
+                PaymentLog.log_event(
+                    payment.id, 
+                    'completed', 
+                    f'Payment completed with transaction {tx.get("transaction_id")}',
+                    {
+                        'transaction_hash': tx.get('transaction_id'),
+                        'received_amount': received_amount_usdt,
+                        'block_timestamp': tx.get('block_timestamp')
+                    }
+                )
 
                 # Отправляем коллбэк
                 callback_payload = {
-                    "payment_id": payment_id,
+                    "payment_id": payment.id,
                     "order_id": order_id,
                     "wallet_address": wallet_address,
                     "currency": "USDT_TRC20",
@@ -226,11 +233,24 @@ def process_pending_payment(payment_id, payment_info):
                     "block_timestamp": tx.get('block_timestamp'),
                     "status": "completed"
                 }
-                send_callback(callback_url, callback_payload)
+                
+                # Попытка отправки callback
+                payment.increment_callback_attempt()
+                try:
+                    send_callback(callback_url, callback_payload)
+                    payment.mark_callback_success()
+                    PaymentLog.log_event(payment.id, 'callback_sent', 'Callback sent successfully')
+                except Exception as e:
+                    app.logger.error("Failed to send callback for payment %s: %s", payment.id, e)
+                    PaymentLog.log_event(payment.id, 'callback_failed', f'Callback failed: {str(e)}')
+                
+                # Сохранить изменения в базе данных
+                db.session.commit()
                 break # Нашли нужную транзакцию, можно перейти к следующему платежу
 
     # Обновляем last_checked_timestamp для следующего цикла
-    payments_to_watch[payment_id]['last_checked_timestamp'] = int(time.time() * 1000) # в миллисекундах
+    payment.last_checked_timestamp = int(time.time() * 1000) # в миллисекундах
+    db.session.commit()
 
 # --- API Эндпоинты ---
 
@@ -288,22 +308,42 @@ def create_payment():
             return jsonify({"error": "order_id cannot exceed 100 characters"}), 400
         
         # Проверка уникальности order_id
-        for existing_payment in payments_to_watch.values():
-            if existing_payment['order_id'] == order_id and existing_payment['status'] == 'pending':
-                return jsonify({"error": "order_id already exists with pending status"}), 409
+        existing_payment = db.session.query(Payment).filter_by(
+            order_id=order_id, 
+            status=PaymentStatus.PENDING
+        ).first()
+        
+        if existing_payment:
+            return jsonify({"error": "order_id already exists with pending status"}), 409
 
         payment_id = str(uuid.uuid4())
-        payments_to_watch[payment_id] = {
-            'wallet_address': wallet_address,
-            'expected_amount_usdt': float(expected_amount_usdt),
-            'callback_url': callback_url,
-            'order_id': order_id.strip(),
-            'status': 'pending',
-            'transaction_hash': None,
-            'received_amount_usdt': None,
-            'created_at': time.time(),
-            'last_checked_timestamp': int(time.time() * 1000) # Инициализируем для первого опроса
-        }
+        
+        # Создаем новый платеж в базе данных
+        payment = Payment(
+            id=payment_id,
+            wallet_address=wallet_address,
+            expected_amount_usdt=expected_amount_usdt,
+            callback_url=callback_url,
+            order_id=order_id.strip(),
+            status=PaymentStatus.PENDING,
+            last_checked_timestamp=int(time.time() * 1000)
+        )
+        
+        db.session.add(payment)
+        
+        # Логируем создание платежа
+        PaymentLog.log_event(
+            payment_id, 
+            'created', 
+            f'Payment watch created for {wallet_address} expecting {expected_amount_usdt} USDT',
+            {
+                'wallet_address': wallet_address,
+                'expected_amount_usdt': expected_amount_usdt,
+                'order_id': order_id
+            }
+        )
+        
+        db.session.commit()
 
         app.logger.info("Payment watch created: %s for %s expecting %s USDT (order_id: %s)", 
                        payment_id, wallet_address, expected_amount_usdt, order_id)
@@ -326,49 +366,71 @@ def get_payment_status(payment_id):
     """
     Эндпоинт для проверки статуса платежа.
     """
-    payment_info = payments_to_watch.get(payment_id)
-    if not payment_info:
+    payment = db.session.query(Payment).filter_by(id=payment_id).first()
+    if not payment:
         return jsonify({"error": "Payment ID not found"}), 404
     
-    # Возвращаем копию, чтобы избежать случайных изменений извне
-    status_info = payment_info.copy()
-    # Удаляем внутренние поля, которые не должны быть видны клиенту
-    status_info.pop('callback_url', None)
-    status_info.pop('last_checked_timestamp', None)
-
-    return jsonify(status_info), 200
+    # Возвращаем данные платежа без внутренних полей
+    return jsonify(payment.to_dict(include_internal=False)), 200
 
 @app.route('/health', methods=['GET'])
 def health_check():
     """
     Эндпоинт для проверки здоровья сервиса.
     """
-    return jsonify({
-        "status": "healthy",
-        "timestamp": time.time(),
-        "active_payments": len([p for p in payments_to_watch.values() if p['status'] == 'pending']),
-        "total_payments": len(payments_to_watch)
-    }), 200
+    try:
+        # Проверяем подключение к базе данных
+        active_payments = db.session.query(Payment).filter_by(status=PaymentStatus.PENDING).count()
+        total_payments = db.session.query(Payment).count()
+        
+        return jsonify({
+            "status": "healthy",
+            "timestamp": time.time(),
+            "active_payments": active_payments,
+            "total_payments": total_payments,
+            "database": "connected"
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "timestamp": time.time(),
+            "error": str(e),
+            "database": "disconnected"
+        }), 503
 
 @app.route('/stats', methods=['GET'])
 def get_stats():
     """
     Эндпоинт для получения статистики сервиса.
     """
-    pending_count = len([p for p in payments_to_watch.values() if p['status'] == 'pending'])
-    completed_count = len([p for p in payments_to_watch.values() if p['status'] == 'completed'])
-    
-    return jsonify({
-        "pending_payments": pending_count,
-        "completed_payments": completed_count,
-        "total_payments": len(payments_to_watch),
-        "uptime_seconds": time.time(),
-        "polling_interval": POLLING_INTERVAL_SECONDS
-    }), 200
+    try:
+        from database import get_database_stats
+        db_stats = get_database_stats()
+        
+        return jsonify({
+            **db_stats,
+            "uptime_seconds": time.time(),
+            "polling_interval": POLLING_INTERVAL_SECONDS
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "error": str(e),
+            "uptime_seconds": time.time(),
+            "polling_interval": POLLING_INTERVAL_SECONDS
+        }), 500
 
 # --- Запуск приложения и монитора ---
 
 if __name__ == '__main__':
+    # Создаем таблицы базы данных при первом запуске
+    with app.app_context():
+        try:
+            db.create_all()
+            app.logger.info("Database tables created/verified successfully")
+        except Exception as e:
+            app.logger.error("Error creating database tables: %s", e)
+            exit(1)
+    
     # Запускаем фоновый монитор в отдельном потоке
     # В продакшене лучше использовать Celery/RQ или другие системы очередей/воркеров
     monitor_thread = Thread(target=monitor_tron_addresses, daemon=True)

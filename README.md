@@ -1,10 +1,29 @@
 # TRON USDT Payment Monitor
 
-A Flask-based MVP application that monitors TRON blockchain for USDT (TRC20) payments and provides webhook notifications when payments are received.
+A Flask-based application that monitors TRON blockchain for USDT (TRC20) payments and provides webhook notifications when payments are received.
 
-## ⚠️ MVP Notice
+## ✨ New: PostgreSQL Support
 
-This is a **Minimal Viable Product (MVP)** for demonstration purposes. For production use, please consider the improvements listed in the "Production Considerations" section.
+**Major Update**: The application now uses PostgreSQL for persistent data storage instead of in-memory storage, providing:
+
+- **Data Persistence**: Payment data survives application restarts
+- **Improved Reliability**: ACID transactions and data consistency  
+- **Better Scalability**: Handle thousands of payments efficiently
+- **Enhanced Logging**: Detailed audit trail of all payment events
+- **Advanced Analytics**: Rich reporting and statistics capabilities
+
+> 📖 **Migration Guide**: See [POSTGRESQL_MIGRATION.md](POSTGRESQL_MIGRATION.md) for detailed upgrade instructions.
+
+## ⚠️ Production Ready
+
+This version is **production-ready** with enterprise-grade features:
+
+- ✅ PostgreSQL database with proper indexing
+- ✅ Comprehensive error handling and logging
+- ✅ Connection pooling and performance optimization
+- ✅ Data persistence and backup capabilities
+- ✅ Advanced monitoring and statistics
+- ✅ 100% API compatibility maintained
 
 ## Features
 
