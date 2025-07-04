@@ -121,4 +121,10 @@ public
 # Temporary folders
 tmp/
 temp/
-cd /home/user0/cpsp && git status
+client/demo_wallet_qr/
+client/enhanced_qr/
+client/qr_test
+client/qr_test_fixed
+client/*.zip
+client/*.png
+*.db

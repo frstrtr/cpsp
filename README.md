@@ -35,6 +35,21 @@ This version is **production-ready** with enterprise-grade features:
 - ✅ Input validation and error handling
 - ✅ Health check and statistics endpoints
 - ✅ Test interface for easy testing
+- ✅ **Client-side address management with mnemonic phrases** ⭐ NEW
+- ✅ **QR code generation for wallet import** ⭐ NEW
+- ✅ **BIP39/BIP44 HD wallet support** ⭐ NEW
+
+## Client-Side Tools ⭐ NEW
+
+The `/client` folder contains advanced tools for wallet generation and address management:
+
+- **Mnemonic Wallet Generator**: BIP39 compatible wallet generation with 12-word recovery phrases
+- **QR Code Export**: Generate QR codes for easy wallet import into mobile applications
+- **HD Wallet Support**: BIP44 hierarchical deterministic wallet derivation
+- **Multiple Export Formats**: Compatible with TronLink and other TRON wallets
+- **Payment Integration**: Seamless integration with the main monitoring service
+
+See [client/README.md](client/README.md) for complete documentation and examples.
 
 ## Requirements
 
